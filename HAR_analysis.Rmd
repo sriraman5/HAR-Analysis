@@ -1,0 +1,109 @@
+---
+title: "Human Activity Recognition"
+author: "R. Srivastav"
+date: "Saturday, November 22, 2014"
+output: html_document
+---
+
+##### Abstract
+
+We examined the data analyzed by Ugulino et al. in [Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201) and attempted to match their performance in detecting the correct execution of a Unilateral Dumbbell Biceps Curls (class A) and classifying common errors such as throwing the elbows to the front (class B) or lowering the dumbbell only halfway (class D).
+
+Our goal was to develop an accurate parsimonious model which came close to matching the 98.03% overall recognition performance they report.
+
+Several different techniques were examined but ultimately we found that using random forests on summary variables yielded excellent reliability.
+
+#### Data Processing
+
+The code below shows how we modified the raw data. Briefly, we eliminated missing values, and also removed timestamps and information identifying the individual who was performing the exercises. Both might be useful in developing a more accurate, personalized model for guiding an exercise regime. In addition, we also decided not to look at measurements along the three dimensions, opting instead to analyze just a summary statistic --- roll-belt instead of roll-belt-x, roll-belt-y, and roll-belt-z. 
+
+The data for this study came from [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har).
+
+```{r getdata}
+train_url <- 'http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+test_url  <- 'http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+
+train_file <- './pml-training.csv'
+test_file  <- './pml-testing.csv'
+
+force <- 0 # helps control reruns of file reads
+if (force | ! file.exists(train_file)) {
+    download.file(train_url, destfile = train_file)
+}
+
+if (force | ! file.exists(test_file)) {
+    download.file(test_url, destfile = test_file)
+}
+
+raw_train <- read.csv(train_file,na.strings=c("", "NA","#DIV/0!")) ## YAW
+raw_test  <- read.csv(test_file,na.strings=c("", "NA","#DIV/0!"))
+
+# only use columns which are not missing data - see how well this works?
+
+use <- colSums(is.na(raw_train))==0
+proc_data <- raw_train[,use]
+proc_test <- raw_test[,use]
+
+# remove also columns corresponding to id and summary info. Incorporate timestamps diffs later
+
+dontuse <- grep('X|user|timestamp|window|total',names(proc_data))
+proc_data <- proc_data[,-dontuse]
+proc_test <- proc_test[,-dontuse]
+
+dontuse <- grep('_x|_y|_z',names(proc_data))
+proc_data <- proc_data[,-dontuse]
+proc_test <- proc_test[,-dontuse]
+
+set.seed(121)
+
+library(caret); library(lattice); library(ggplot2)
+
+# create test and validation sets
+# note that test file above is not the same as the testing file below which is used for cross-validation
+
+use <- createDataPartition(y=proc_data$classe, p=0.8, list=FALSE)
+training <- proc_data[ use,]
+testing  <- proc_data[-use,]
+```
+
+#### Sample Data (a peek)
+
+The data was partitioned into a test and validation set. The tables below show the number of observations sorted by class and summary statistics for a few important variables. There were four common errors which were classified in addition to the correct execution (class A).
+
+``` {r peek}
+summary(training[,c(13,1,6,9,11)])
+```
+
+#### Results
+
+As noted above we looked at many different predictive models and also many different predictor sets, but the simplest also seemed to be the best. Ultimately, we used a random forest with just 12 features. The forest size was set to four although using even just two, yields only marginally lower predictive accuracy.
+
+``` {r maketree}
+
+ctrl <- trainControl(method = "cv", number = 4, allowParallel = TRUE)
+fit <- train(classe ~., method="rf", data=training, trControl=ctrl)
+fit
+```
+
+The table below shows that the classifier was nearly perfect for the training set.
+``` {r InSample}
+confusionMatrix(predict(fit,training),training$classe)
+```
+
+The results for the validation set were nearly as good. Note that validation is strictly speaking not necessary for this algorithm, but it does provide a convenient metric for judging how well we did.
+``` {r outSample}
+conf <- confusionMatrix(predict(fit,testing), testing$classe)
+conf
+```
+
+We feel comfortable reporting a predictive accuracy between `r round(100*conf$overall[3],1)` and `r round(100*conf$overall[4],1)` percent. Ugulino et al. obtained an accuracy over 99% using more variables and ten trees.
+
+The graph below shows how much each variable contributes to the quality of classification. With minor differences, results are robust over mutlple runs of the random forest algorithm.
+
+``` {r gini}
+ varImpPlot(fit$finalModel,main="Contribution to Gini")
+ ```
+
+#### Conclusion
+
+The classifier derived here performs well. We are especially pleased that it has the highest balanced accuracy and excellent positive and negative predictive values --- meaning that it rarely transmits incorrect feedback to the athelete. Training with a minimal number of trees and a smaller feature set may or may not be an asset in the deployment of the tool depending on the degree of personalization desired.
